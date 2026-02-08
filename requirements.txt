@@ -1,0 +1,8 @@
+numpy
+einops
+jax
+jaxtyping
+optax
+tqdm
+tyro
+git+https://github.com/matomatical/matthewplotlib.git
