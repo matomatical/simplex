@@ -9,9 +9,9 @@ their residual stream" ([arXiv](https://arxiv.org/abs/2405.15943)).
 
 * [x] Implement HMM engine and Z1R + Mess3 HMMs
 * [x] Implement transformer architecture
-  * [ ] A single head with a smaller head dimension
+  * [x] Allow a single head with a smaller head dimension
 * [ ] Train for 1m steps
-* [ ] Implement ground truth mixed state presentation engine
+* [x] Implement ground truth mixed state presentation engine
 * [ ] Find linear subspace
 * [ ] Make the famous plot
 

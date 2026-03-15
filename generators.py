@@ -88,6 +88,28 @@ class SequenceGenerator:
         )
     
 
+    @jax.jit
+    def belief_states(
+        self: Self,
+        symbols: Int[Array, "n"],
+    ) -> Float[Array, "n+1 states"]:
+        """Compute ground truth belief states for an observation sequence.
+
+        Returns the posterior P(S_t | o_1, ..., o_t) at each timestep,
+        starting with the prior (before any observations).
+        """
+        def step(belief, symbol):
+            # b_new(s') = Σ_s b(s) * T[symbol, s, s']
+            belief = belief @ self.transition_distributions[symbol]
+            belief = belief / belief.sum()
+            return belief, belief
+        belief0 = self.initial_distribution
+        _, beliefs = jax.lax.scan(step, belief0, symbols)
+        # prepend the prior
+        beliefs = jnp.concatenate([belief0[None], beliefs])
+        return beliefs
+
+
     @jax.jit(static_argnames=["sequence_length", "batch_size"])
     def sample_batch(
         self: Self,
@@ -162,4 +184,63 @@ ALT = SequenceGenerator(
 )
 
 
+# # # 
+# Testing
+
+
+def main(
+    generator: str = "mess3",
+    num_sequences: int = 1000,
+    sequence_length: int = 100,
+    seed: int = 0,
+    save: str | None = None,
+):
+    import numpy as np
+    import matthewplotlib as mp
+
+    GENERATORS = {
+        "mess3": MESS3,
+        "zor": ZOR,
+        "alt": ALT,
+    }
+    gen = GENERATORS[generator]
+    key = jax.random.key(seed)
+
+    # sample sequences and compute belief states
+    batch = gen.sample_batch(key, sequence_length, num_sequences)
+    # compute belief states for each sequence: batch_size x (n+1) x states
+    all_beliefs = jax.vmap(gen.belief_states)(batch.symbols)
+    # flatten to (batch_size * (n+1)) x states, drop the prior (first timestep)
+    beliefs = all_beliefs[:, 1:, :].reshape(-1, gen.num_states)
+    beliefs = np.array(beliefs)
+
+    # project 3-state simplex to 2D equilateral triangle
+    # vertices: v0=(0,0), v1=(1,0), v2=(0.5, sqrt(3)/2)
+    xs = beliefs[:, 1] + 0.5 * beliefs[:, 2]
+    ys = (np.sqrt(3) / 2) * beliefs[:, 2]
+
+    # color by belief state (RGB = probability of each state)
+    cs = np.stack([beliefs[:, 0], beliefs[:, 1], beliefs[:, 2]], axis=-1)
+    cs = (cs * 255).astype(np.uint8)
+
+    plot = mp.axes(
+        mp.scatter(
+            (xs, ys, cs),
+            height=30,
+            width=60,
+            xrange=(-0.05, 1.05),
+            yrange=(-0.05, 0.95),
+        ),
+        title=f" {generator} belief states ",
+        xlabel="",
+        ylabel="",
+    )
+    print(plot)
+    if save:
+        plot.saveimg(save)
+
+
+if __name__ == "__main__":
+    import tyro
+    tyro.cli(main)
 
