@@ -86,12 +86,14 @@ class MultiHeadedCausalSelfAttention:
 
 
     @staticmethod
-    @jax.jit(static_argnames=["embed_size", "num_heads"])
+    @jax.jit(static_argnames=["embed_size", "num_heads", "head_size"])
     def init(
         key: PRNGKeyArray,
         embed_size: int,
         num_heads: int,
+        head_size: int,
     ) -> Self:
+        inner_size = num_heads * head_size
         key_qkv, key = jax.random.split(key)
         QKV = jax.vmap(
             LinearTransform.init,
@@ -99,12 +101,12 @@ class MultiHeadedCausalSelfAttention:
         )(
             jax.random.split(key_qkv, 3),
             embed_size,
-            embed_size,
+            inner_size,
         )
         key_out, key = jax.random.split(key)
         output_transform = LinearTransform.init(
             key_out,
-            embed_size,
+            inner_size,
             embed_size,
         )
         return MultiHeadedCausalSelfAttention(
@@ -240,11 +242,12 @@ class DecodeTransformerBlock:
 
 
     @staticmethod
-    @jax.jit(static_argnames=["embed_size", "num_heads", "mlp_size"])
+    @jax.jit(static_argnames=["embed_size", "num_heads", "head_size", "mlp_size"])
     def init(
         key: PRNGKeyArray,
         embed_size: int,
         num_heads: int,
+        head_size: int,
         mlp_size: int,
     ) -> Self:
         k1, k2, k3, k4 = jax.random.split(key, 4)
@@ -253,6 +256,7 @@ class DecodeTransformerBlock:
             key=k2,
             embed_size=embed_size,
             num_heads=num_heads,
+            head_size=head_size,
         )
         layernorm2 = LayerNorm.init(key=k3, size=embed_size)
         compute = MLP.init(
@@ -303,6 +307,7 @@ class DecodeTransformer:
         "max_context_length",
         "num_blocks",
         "num_heads",
+        "head_size",
         "embed_size",
         "mlp_size",
         "num_outputs",
@@ -313,6 +318,7 @@ class DecodeTransformer:
         max_context_length: int,
         num_blocks: int,
         num_heads: int,
+        head_size: int,
         embed_size: int,
         mlp_size: int,
         num_outputs: int,
@@ -333,11 +339,12 @@ class DecodeTransformer:
         # transformer blocks
         blocks = jax.vmap(
             DecodeTransformerBlock.init,
-            in_axes=(0,None,None,None),
+            in_axes=(0,None,None,None,None),
         )(
             jax.random.split(k3, num_blocks),
             embed_size,
             num_heads,
+            head_size,
             mlp_size,
         )
 
@@ -419,7 +426,7 @@ class SequenceTransformer:
             num_blocks=num_blocks,
             embed_size=embed_size,
             num_heads=num_heads,
-            # head_size=head_size,
+            head_size=head_size,
             mlp_size=mlp_size,
             num_outputs=num_symbols,
         )
