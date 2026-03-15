@@ -172,7 +172,7 @@ def main(
     mlp_size: int         = 480,
     # training config
     learning_rate: float  = 5e-4,
-    batch_size: int       = 256,
+    batch_size_per_device: int = 256,
     num_steps: int        = 1024 * 1024,
     opt: Literal[
         'sgd',
@@ -192,6 +192,10 @@ def main(
 ):
     args = ' '.join(sys.argv)
     start_time = datetime.datetime.now()
+
+    num_devices = jax.local_device_count()
+    batch_size = batch_size_per_device * num_devices
+
     print("configuration:")
     config = locals()
     for config_key, config_value in config.items():
@@ -312,11 +316,12 @@ def main(
 
     print("defining train step...")
     @jax.jit
-    def train_step(key, model, opt_state):
+    def _train_step_single(key, model, opt_state):
+        """Single-device train step: sample batch, compute loss+grads."""
         sequences = sequence_generator.sample_batch(
             key,
             sequence_length=sequence_length+1,
-            batch_size=batch_size,
+            batch_size=batch_size_per_device,
         )
         def loss_fn(model, symbols):
             next_symbols_pred = model.forward_batch(
@@ -332,17 +337,24 @@ def main(
             )
             return per_token_losses.mean()
         loss, grads = jax.value_and_grad(loss_fn)(model, sequences.symbols)
+        # average gradients and loss across devices
+        grads = jax.lax.pmean(grads, axis_name='devices')
+        loss = jax.lax.pmean(loss, axis_name='devices')
         updates, opt_state = optimiser.update(grads, opt_state, model)
         model = optax.apply_updates(model, updates)
         return model, opt_state, loss
 
+    pmap_train_step = jax.pmap(
+        _train_step_single,
+        axis_name='devices',
+    )
 
     @jax.jit
-    def eval_loss(key, model):
+    def _eval_loss_single(key, model):
         sequences = sequence_generator.sample_batch(
             key,
             sequence_length=sequence_length+1,
-            batch_size=batch_size,
+            batch_size=batch_size_per_device,
         )
         logits = model.forward_batch(
             sequences.symbols[:, :-1],
@@ -351,9 +363,15 @@ def main(
             sequences.symbols[:, 1:].reshape(-1),
             num_classes=model.num_symbols,
         )
-        return optax.softmax_cross_entropy(
+        loss = optax.softmax_cross_entropy(
             logits=logits, labels=targets,
         ).mean()
+        return jax.lax.pmean(loss, axis_name='devices')
+
+    pmap_eval_loss = jax.pmap(
+        _eval_loss_single,
+        axis_name='devices',
+    )
 
 
     def compute_r2(true, predicted):
@@ -412,12 +430,21 @@ def main(
     # factored degrees of freedom: each factor's beliefs sum to 1
     factored_dof = sum(ns - 1 for ns in factor_num_states)
 
+    # replicate model and opt_state across devices
+    rep_model = jax.device_put_replicated(model, jax.local_devices())
+    rep_opt_state = jax.device_put_replicated(opt_state, jax.local_devices())
+
+    def unreplicate(x):
+        """Extract single copy from replicated state."""
+        return jax.tree.map(lambda a: a[0], x)
+
     print("starting training loop...")
     # seed with initial model loss and probe
     key_eval, key = jax.random.split(key)
-    train_losses = [float(eval_loss(key_eval, model))]
+    eval_keys = jax.random.split(key_eval, num_devices)
+    train_losses = [float(pmap_eval_loss(eval_keys, rep_model)[0])]
     (predicted_fac, factored_mse, per_factor_mse, factored_r2,
-     predicted_jnt, joint_mse, joint_r2, dims_95) = probe(model)
+     predicted_jnt, joint_mse, joint_r2, dims_95) = probe(unreplicate(rep_model))
     probe_losses = [
         (0, float(factored_mse), *[float(m) for m in per_factor_mse], float(joint_mse))
     ]
@@ -444,16 +471,18 @@ def main(
     # train!
     for t in tqdm.trange(num_steps):
         key_sgd, key = jax.random.split(key)
-        model, opt_state, loss = train_step(
-            key_sgd,
-            model,
-            opt_state,
+        device_keys = jax.random.split(key_sgd, num_devices)
+        rep_model, rep_opt_state, rep_loss = pmap_train_step(
+            device_keys,
+            rep_model,
+            rep_opt_state,
         )
 
         if (t + 1) % vis_period == 0:
-            train_losses.append(float(loss))
+            train_losses.append(float(rep_loss[0]))
+            model_single = unreplicate(rep_model)
             (predicted_fac, factored_mse, per_factor_mse, factored_r2,
-             predicted_jnt, joint_mse, joint_r2, dims_95) = probe(model)
+             predicted_jnt, joint_mse, joint_r2, dims_95) = probe(model_single)
             probe_losses.append(
                 (t + 1, float(factored_mse), *[float(m) for m in per_factor_mse], float(joint_mse))
             )
@@ -476,6 +505,8 @@ def main(
         final_dims = dims_history[-1]
         result = {
             "num_factors": num_factors,
+            "num_devices": num_devices,
+            "batch_size": batch_size,
             "epsilon": epsilon,
             "factored_mse": final_probe[1],
             "joint_mse": final_probe[-1],
