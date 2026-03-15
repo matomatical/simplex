@@ -366,17 +366,22 @@ class DecodeTransformer:
             unembedding=unembedding,
         )
 
+    def _embed(
+        self: Self,
+        ts: Float[Array, "t num_inputs"],
+    ) -> Float[Array, "t embed_size"]:
+        context_length, _num_inputs = ts.shape
+        x_semantic = jax.vmap(self.token_embedding.forward)(ts)
+        x_position = self.postn_embedding.weights[:context_length, :]
+        return x_semantic + x_position
+
+
     @jax.jit
     def forward(
         self: Self,
         ts: Float[Array, "t num_inputs"],
     ) -> Float[Array, "t num_outputs"]:
-        context_length, _num_inputs = ts.shape
-
-        # embedding: semantic and positional token embeddings
-        x_semantic = jax.vmap(self.token_embedding.forward)(ts)
-        x_position = self.postn_embedding.weights[:context_length, :]
-        x = x_semantic + x_position                         # -> t embed_size
+        x = self._embed(ts)
         # apply the num_blocks attention blocks in sequence
         x, _ = jax.lax.scan(
             lambda x, block: (block.forward(x), None),
@@ -387,6 +392,28 @@ class DecodeTransformer:
         x_norm = jax.vmap(self.unembedding_layernorm.forward)(x)
         x = jax.vmap(self.unembedding.forward)(x_norm)      # -> t num_outputs
         return x
+
+
+    @jax.jit
+    def forward_with_activations(
+        self: Self,
+        ts: Float[Array, "t num_inputs"],
+    ) -> tuple[
+        Float[Array, "t num_outputs"],
+        Float[Array, "num_blocks_plus_1 t embed_size"],
+    ]:
+        x0 = self._embed(ts)
+        # collect residual stream after each block
+        def scan_fn(x, block):
+            y = block.forward(x)
+            return y, y
+        x, layer_xs = jax.lax.scan(scan_fn, x0, self.blocks)
+        # prepend the embedding layer activations
+        activations = jnp.concatenate([x0[None], layer_xs])
+        # unembedding
+        x_norm = jax.vmap(self.unembedding_layernorm.forward)(x)
+        x = jax.vmap(self.unembedding.forward)(x_norm)
+        return x, activations
 
 
 @strux.struct
@@ -447,11 +474,34 @@ class SequenceTransformer:
     
 
     @jax.jit
+    def forward_with_activations(
+        self: Self,
+        xs: Int[Array, "sequence_length"],
+    ) -> tuple[
+        Float[Array, "sequence_length num_symbols"],
+        Float[Array, "num_layers t embed_size"],
+    ]:
+        toks = jax.nn.one_hot(x=xs, num_classes=self.num_symbols)
+        return self.transformer.forward_with_activations(toks)
+
+
+    @jax.jit
     def forward_batch(
         self: Self,
         xss: Int[Array, "batch_size sequence_length"],
     ) -> Float[Array, "batch_size sequence_length num_symbols"]:
         return jax.vmap(self.forward)(xss)
+
+
+    @jax.jit
+    def forward_batch_with_activations(
+        self: Self,
+        xss: Int[Array, "batch_size sequence_length"],
+    ) -> tuple[
+        Float[Array, "batch_size sequence_length num_symbols"],
+        Float[Array, "batch_size num_layers sequence_length embed_size"],
+    ]:
+        return jax.vmap(self.forward_with_activations)(xss)
 
 
 
