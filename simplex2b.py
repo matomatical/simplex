@@ -18,26 +18,35 @@ import strux
 from transformer import SequenceTransformer
 from generators import (
     Sequence, SequenceGenerator, mess3, noisy_channel,
-    FIG1A_TOP, FIG1A_BOTTOM,
 )
 
 from typing import Self, Literal
 from jaxtyping import Array, Float, Int, PRNGKeyArray
 
 
+def simplex_project(beliefs_3state):
+    """Project 3-state beliefs to 2D simplex triangle coordinates."""
+    xs = beliefs_3state[:, 1] + 0.5 * beliefs_3state[:, 2]
+    ys = (np.sqrt(3) / 2) * beliefs_3state[:, 2]
+    return xs, ys
+
+
 def visualise(
     step,
     factors,
-    factor_beliefs,      # list of (num_points,) per-factor P(S+) ground truth
-    factor_predictions,  # list of (num_points,) per-factor P(S+) predicted
-    joint_beliefs,       # (num_points, num_joint_states) for tetrahedron
-    joint_predictions,   # (num_points, num_joint_states) probed
+    factor_beliefs_3,    # list of (num_points, 3) per-factor belief vectors
+    factor_predicted_3,  # list of (num_points, 3) per-factor probed beliefs
     train_losses,
     probe_losses,        # list of (step, total_mse, *per_factor_mse, joint_mse)
     r2_history,          # list of (step, factored_r2, joint_r2)
+    dims_history,        # list of (step, dims_95)
     vis_period,
+    factored_dof,        # number of factored degrees of freedom (for reference line)
 ):
     xmax = max(step, 1)
+    wide_w = 72
+    simplex_w = 20
+    colours = ['red', 'green', 'blue', 'cyan', 'white']
 
     # loss curve
     steps = np.arange(len(train_losses)) * vis_period
@@ -45,11 +54,11 @@ def visualise(
         mp.scatter(
             (steps, np.array(train_losses), 'cyan'),
             height=6,
-            width=20,
+            width=wide_w,
             xrange=(0, xmax),
             yrange=(0, max(max(train_losses), 1.2)),
         ),
-        title=" loss ",
+        title=f" loss ({train_losses[-1]:.4f}) ",
         ylabel="nats",
     )
 
@@ -67,7 +76,6 @@ def visualise(
         (probe_steps, total_mse, 'magenta'),
         (probe_steps, joint_mse, 'yellow'),
     ]
-    colours = ['red', 'green', 'blue']
     for i, mse in enumerate(per_factor_mses):
         probe_layers.append(
             (probe_steps, mse, colours[i % len(colours)])
@@ -76,11 +84,11 @@ def visualise(
         mp.scatter(
             *probe_layers,
             height=6,
-            width=20,
+            width=wide_w,
             xrange=(0, xmax),
             yrange=(0, ymax_probe),
         ),
-        title=" probe mse (magenta=factored, yellow=joint, r/g=factors) ",
+        title=" probe mse (magenta=factored, yellow=joint, colours=factors) ",
     )
 
     # R² curves
@@ -92,109 +100,70 @@ def visualise(
             (r2_steps, factored_r2, 'magenta'),
             (r2_steps, joint_r2, 'yellow'),
             height=6,
-            width=20,
+            width=wide_w,
             xrange=(0, xmax),
             yrange=(0, 1),
         ),
         title=" R² (magenta=factored, yellow=joint) ",
     )
 
-    # per-factor probe accuracy: gt P(S+) vs probed P(S+)
+    # PCA dimensionality plot
+    dims_steps = np.array([s for s, *_ in dims_history])
+    dims_95 = np.array([v for _, v in dims_history])
+    dims_max = max(float(dims_95.max()), factored_dof + 2, 1)
+    # reference line at factored DoF
+    ref_x = np.array([0, xmax])
+    ref_y = np.array([factored_dof, factored_dof])
+    dims_plot = mp.axes(
+        mp.scatter(
+            (ref_x, ref_y, 'green'),
+            (dims_steps, dims_95, 'yellow'),
+            height=6,
+            width=wide_w,
+            xrange=(0, xmax),
+            yrange=(0, dims_max),
+        ),
+        title=f" PCA dims for 95% variance (green=factored DoF={factored_dof}) ",
+    )
+
+    # per-factor simplex plots: ground truth beliefs as coloured triangle
     factor_plot_list = []
-    for i, (factor, gt, pred) in enumerate(
-        zip(factors, factor_beliefs, factor_predictions)
+    for i, (gt, pred) in enumerate(
+        zip(factor_beliefs_3, factor_predicted_3)
     ):
+        gt = np.array(gt)
+        pred = np.array(pred)
+        gt_cs = (gt * 255).astype(np.uint8)
+        pred_cs = np.full((len(pred), 3), 0, dtype=np.uint8)
+        pred_cs[:, 0] = 255
+        pred_cs[:, 2] = 255  # magenta
+        gt_x, gt_y = simplex_project(gt)
+        pr_x, pr_y = simplex_project(pred)
         factor_plot_list.append(mp.axes(
             mp.scatter(
-                (np.array(gt), np.array(pred), colours[i % len(colours)]),
-                height=6,
-                width=14,
-                xrange=(-0.1, 1.1),
-                yrange=(-0.1, 1.1),
+                (gt_x, gt_y, gt_cs),
+                (pr_x, pr_y, pred_cs),
+                height=simplex_w // 2,
+                width=simplex_w,
+                xrange=(-0.05, 1.05),
+                yrange=(-0.05, 0.95),
             ),
-            title=f" factor {i} ",
-            xlabel="true P(S+)",
-            ylabel="probed",
+            title=f" F{i} ",
         ))
 
-    # rotating tetrahedron: ground truth beliefs in joint 4-state space
-    jb = np.array(joint_beliefs)
-    jp = np.array(joint_predictions)
-    # colour by factor marginals (reshape 4 joint states as 2x2)
-    n_factors = len(factors)
-    n_states = [f.num_states for f in factors]
-    b_reshaped = jb.reshape(-1, *n_states)
-    b1 = b_reshaped.sum(axis=2)[:, -1]  # P(factor0 = S+)
-    b2 = b_reshaped.sum(axis=1)[:, -1]  # P(factor1 = S+)
-    gt_cs = np.stack([b1, b2, 0.5 * np.ones(len(b1))], axis=-1)
-    gt_cs = (gt_cs * 255).astype(np.uint8)
-
-    # embed 3-simplex as regular tetrahedron
-    verts = np.array([[-1, 1, -1], [1, -1, -1], [-1, -1, 1], [1, 1, 1]],
-                     dtype=float)
-    gt_pts = jb @ verts
-    pr_pts = jp @ verts
-
-    # tetrahedron edges
-    edges = []
-    for i in range(4):
-        for j in range(i + 1, 4):
-            t = np.linspace(0, 1, 200)[:, None]
-            edges.append(verts[i] * (1 - t) + verts[j] * t)
-    edge_pts = np.concatenate(edges)
-    edge_cs = np.full((len(edge_pts), 3), 80, dtype=np.uint8)
-
-    # probed points: magenta
-    pr_cs = np.full((len(pr_pts), 3), 0, dtype=np.uint8)
-    pr_cs[:, 0] = 255
-    pr_cs[:, 2] = 255
-
-    # camera orbit
-    angle = 0.3 * step / 64
-    orbit_radius = 5.0
-    cam = np.array([
-        orbit_radius * np.sin(angle),
-        1.5,
-        orbit_radius * np.cos(angle),
-    ])
-
-    gt_tetra = mp.border(
-        mp.scatter3(
-            (edge_pts, edge_cs),
-            (gt_pts, gt_cs),
-            camera_position=cam,
-            vertical_fov_degrees=30,
-            height=7,
-            width=14,
-        ),
-        title="truth",
-    )
-    pr_tetra = mp.border(
-        mp.scatter3(
-            (edge_pts, edge_cs),
-            (pr_pts, pr_cs),
-            camera_position=cam,
-            vertical_fov_degrees=30,
-            height=7,
-            width=14,
-        ),
-        title="probed",
-    )
-
-    return mp.hstack(
-        mp.vstack(loss_plot, probe_loss_plot, r2_plot),
-        mp.vstack(*factor_plot_list),
-        mp.vstack(gt_tetra, pr_tetra),
+    return mp.vstack(
+        loss_plot,
+        probe_loss_plot,
+        r2_plot,
+        dims_plot,
+        mp.wrap(*factor_plot_list, cols=3),
     )
 
 
 def main(
     # data config
     sequence_length: int  = 8,
-    generator: Literal[
-        'fig1a',
-        'mess3x2',
-    ]                     = 'fig1a',
+    num_factors: int      = 3,
     # model config
     num_blocks: int       = 4,
     embed_size: int       = 120,
@@ -232,10 +201,11 @@ def main(
 
     print("initialising training distribution...")
     key_tasks, key = jax.random.split(key)
-    if generator == 'fig1a':
-        factors = [FIG1A_TOP, FIG1A_BOTTOM]
-    elif generator == 'mess3x2':
-        factors = [mess3(), mess3()]
+    alphas = np.linspace(0.55, 0.85, num_factors)
+    xs = np.linspace(0.10, 0.45, num_factors)
+    factors = [mess3(alpha=float(a), x=float(x)) for a, x in zip(alphas, xs)]
+    for i, (a, x) in enumerate(zip(alphas, xs)):
+        print(f"  F{i}: alpha={a:.3f}, x={x:.3f}")
 
     sequence_generator = factors[0]
     for f in factors[1:]:
@@ -295,8 +265,7 @@ def main(
     probe_symbols = probe_batch.symbols
 
     # decompose joint symbols into per-factor sub-tokens and compute beliefs
-    # joint symbol x = z1 * s2 + z2  (for 2 factors)
-    # generalise: x = z1 * (s2*s3*...) + z2 * (s3*...) + ... + zN
+    # joint symbol x = z1 * (s2*s3*...) + z2 * (s3*...) + ... + zN
     def decompose_symbols(joint_symbols):
         """Decompose joint symbols into per-factor sub-token sequences."""
         sub_tokens = []
@@ -333,10 +302,10 @@ def main(
     joint_beliefs_all = joint_beliefs_all[:, 1:, :]  # drop prior
     joint_beliefs_flat = joint_beliefs_all.reshape(-1, sequence_generator.num_states)
 
-    # for visualisation: per-factor P(S+) (last state)
+    # for visualisation: per-factor full 3-state beliefs
     vis_n = min(500, probe_num_seqs * sequence_length)
     factor_beliefs_vis = [
-        b.reshape(-1, b.shape[-1])[:vis_n, -1]
+        b.reshape(-1, b.shape[-1])[:vis_n]
         for b in per_factor_beliefs
     ]
 
@@ -393,6 +362,7 @@ def main(
         ss_tot = jnp.sum((true - jnp.mean(true, axis=0)) ** 2)
         return 1 - ss_res / ss_tot
 
+
     @jax.jit
     def probe(model):
         # get activations at probe_layer
@@ -402,61 +372,72 @@ def main(
         # affine least-squares probe: [activations | 1] @ W ≈ beliefs
         ones = jnp.ones((acts_flat.shape[0], 1))
         X = jnp.concatenate([acts_flat, ones], axis=1)
-        # factored probe: predict per-factor beliefs from sub-token decomposition
-        W, _, _, _ = jnp.linalg.lstsq(X, probe_beliefs_flat)
-        predicted = X @ W
-        # total MSE
-        total_mse = jnp.mean((probe_beliefs_flat - predicted) ** 2)
+        # factored probe: predict per-factor beliefs
+        W_fac, _, _, _ = jnp.linalg.lstsq(X, probe_beliefs_flat)
+        predicted_fac = X @ W_fac
+        # total factored MSE
+        factored_mse = jnp.mean((probe_beliefs_flat - predicted_fac) ** 2)
         # per-factor MSE
         offset = 0
         per_factor_mse = []
         for ns in factor_num_states:
-            factor_pred = predicted[:, offset:offset+ns]
+            factor_pred = predicted_fac[:, offset:offset+ns]
             factor_true = probe_beliefs_flat[:, offset:offset+ns]
             per_factor_mse.append(
                 jnp.mean((factor_true - factor_pred) ** 2)
             )
             offset += ns
         # factored R²
-        factored_r2 = compute_r2(probe_beliefs_flat, predicted)
-        # joint probe: predict true Bayesian beliefs from noisy joint generator
-        W_joint, _, _, _ = jnp.linalg.lstsq(X, joint_beliefs_flat)
-        predicted_joint = X @ W_joint
-        joint_mse = jnp.mean((joint_beliefs_flat - predicted_joint) ** 2)
+        factored_r2 = compute_r2(probe_beliefs_flat, predicted_fac)
+        # joint probe: predict true Bayesian beliefs from joint generator
+        W_jnt, _, _, _ = jnp.linalg.lstsq(X, joint_beliefs_flat)
+        predicted_jnt = X @ W_jnt
+        joint_mse = jnp.mean((joint_beliefs_flat - predicted_jnt) ** 2)
         # joint R²
-        joint_r2 = compute_r2(joint_beliefs_flat, predicted_joint)
-        return predicted, total_mse, per_factor_mse, factored_r2, predicted_joint, joint_mse, joint_r2
+        joint_r2 = compute_r2(joint_beliefs_flat, predicted_jnt)
+        # PCA: dims for 95% variance
+        acts_centered = acts_flat - jnp.mean(acts_flat, axis=0)
+        S = jnp.linalg.svd(acts_centered, full_matrices=False, compute_uv=False)
+        explained = jnp.cumsum(S ** 2) / jnp.sum(S ** 2)
+        dims_95 = jnp.argmax(explained >= 0.95) + 1
+        return (
+            predicted_fac, factored_mse, per_factor_mse, factored_r2,
+            predicted_jnt, joint_mse, joint_r2,
+            dims_95,
+        )
 
 
     if not train: return
+
+    # factored degrees of freedom: each factor's beliefs sum to 1
+    factored_dof = sum(ns - 1 for ns in factor_num_states)
 
     print("starting training loop...")
     # seed with initial model loss and probe
     key_eval, key = jax.random.split(key)
     train_losses = [float(eval_loss(key_eval, model))]
-    (predicted, total_mse, per_factor_mse, factored_r2,
-     predicted_joint, joint_mse, joint_r2) = probe(model)
-    probe_losses = [(0, float(total_mse), *[float(m) for m in per_factor_mse], float(joint_mse))]
+    (predicted_fac, factored_mse, per_factor_mse, factored_r2,
+     predicted_jnt, joint_mse, joint_r2, dims_95) = probe(model)
+    probe_losses = [
+        (0, float(factored_mse), *[float(m) for m in per_factor_mse], float(joint_mse))
+    ]
     r2_history = [(0, float(factored_r2), float(joint_r2))]
+    dims_history = [(0, int(dims_95))]
 
-    # extract per-factor predicted P(S+) for scatter plots
+    # extract per-factor predicted belief vectors for simplex plots
     def extract_factor_predictions(predicted):
         factor_preds = []
         offset = 0
         for ns in factor_num_states:
-            factor_preds.append(np.array(predicted[:vis_n, offset + ns - 1]))
+            factor_preds.append(np.array(predicted[:vis_n, offset:offset+ns]))
             offset += ns
         return factor_preds
 
-    # true joint beliefs for tetrahedron (from the possibly-noisy generator)
-    joint_beliefs_vis = np.array(joint_beliefs_flat[:vis_n])
-
-    factor_preds_vis = extract_factor_predictions(predicted)
-    joint_preds_vis = np.array(predicted_joint[:vis_n])
+    factor_preds_vis = extract_factor_predictions(predicted_fac)
     plot = visualise(
         0, factors, factor_beliefs_vis, factor_preds_vis,
-        joint_beliefs_vis, joint_preds_vis,
-        train_losses, probe_losses, r2_history, vis_period,
+        train_losses, probe_losses, r2_history, dims_history,
+        vis_period, factored_dof,
     )
     print(plot)
 
@@ -471,33 +452,36 @@ def main(
 
         if (t + 1) % vis_period == 0:
             train_losses.append(float(loss))
-            (predicted, total_mse, per_factor_mse, factored_r2,
-             predicted_joint, joint_mse, joint_r2) = probe(model)
+            (predicted_fac, factored_mse, per_factor_mse, factored_r2,
+             predicted_jnt, joint_mse, joint_r2, dims_95) = probe(model)
             probe_losses.append(
-                (t + 1, float(total_mse), *[float(m) for m in per_factor_mse], float(joint_mse))
+                (t + 1, float(factored_mse), *[float(m) for m in per_factor_mse], float(joint_mse))
             )
             r2_history.append((t + 1, float(factored_r2), float(joint_r2)))
-            factor_preds_vis = extract_factor_predictions(predicted)
-            joint_preds_vis = np.array(predicted_joint[:vis_n])
+            dims_history.append((t + 1, int(dims_95)))
+            factor_preds_vis = extract_factor_predictions(predicted_fac)
             new_plot = visualise(
                 t + 1, factors, factor_beliefs_vis, factor_preds_vis,
-                joint_beliefs_vis, joint_preds_vis,
-                train_losses, probe_losses, r2_history, vis_period,
+                train_losses, probe_losses, r2_history, dims_history,
+                vis_period, factored_dof,
             )
             tqdm.tqdm.write(f"{-plot}{new_plot}")
             plot = new_plot
 
 
-    # log final probe MSEs to results file
+    # log final results
     if results_file:
         final_probe = probe_losses[-1]
         final_r2 = r2_history[-1]
+        final_dims = dims_history[-1]
         result = {
+            "num_factors": num_factors,
             "epsilon": epsilon,
             "factored_mse": final_probe[1],
             "joint_mse": final_probe[-1],
             "factored_r2": final_r2[1],
             "joint_r2": final_r2[2],
+            "dims_95": final_dims[1],
             "train_loss": train_losses[-1],
             "seed": seed,
         }

@@ -28,9 +28,9 @@ Replicate Shai et al. (2026) "Transformers learn factored representations"
   * [x] Train transformer
   * [x] Recover (factorised) state representation (probes)
   * [x] Epsilon sweep: turns out joint probe beats factored at all noise levels
-* [ ] Scale to 5-factor model
-  * [ ] Train transformer
-  * [ ] Recover (factorised) state representations (probes, PCA?)
+* [x] Scale to 5-factor model
+  * [x] Train transformer
+  * [x] Recover (factorised) state representations (probes, PCA)
   * [ ] Epsilon sweep
 * [ ] Replicate figure 4b, stagewise development?
 

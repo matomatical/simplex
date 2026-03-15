@@ -17,9 +17,12 @@ class Sequence:
     symbols: Int[Array, "n"]
 
     def __str__(self: Self) -> str:
-        s = "S" + " {} S".join([str(state) for state in self.states])
-        s = s.format(*[chr(ord('a')+symbol) for symbol in self.symbols])
-        return s
+        parts = []
+        for i, state in enumerate(self.states):
+            parts.append(f"S{int(state)}")
+            if i < len(self.symbols):
+                parts.append(f"[{int(self.symbols[i])}]")
+        return ' '.join(parts)
 
 
 # # # 
