@@ -100,9 +100,11 @@ class SequenceGenerator:
         """
         def step(belief, symbol):
             # b_new(s') = Σ_s b(s) * T[symbol, s, s']
-            belief = belief @ self.transition_distributions[symbol]
-            belief = belief / belief.sum()
-            return belief, belief
+            belief_new = belief @ self.transition_distributions[symbol]
+            total = belief_new.sum()
+            # if observation is impossible under model, keep previous belief
+            belief_new = jnp.where(total > 0, belief_new / total, belief)
+            return belief_new, belief_new
         belief0 = self.initial_distribution
         _, beliefs = jax.lax.scan(step, belief0, symbols)
         # prepend the prior
@@ -153,6 +155,25 @@ class SequenceGenerator:
             transition_distributions=joint_T,
             initial_distribution=joint_init,
         )
+
+
+def noisy_channel(gen: SequenceGenerator, epsilon: float) -> SequenceGenerator:
+    """Apply memoryless epsilon-noise to a generator.
+
+    With probability (1-ε), emit the original token.
+    With probability ε, replace with a uniformly random other token.
+    """
+    S = gen.num_symbols
+    T = gen.transition_distributions  # (symbols, states, states)
+    # sum over all symbols to get state-transition-given-state: (states, states)
+    T_state = T.sum(axis=0)
+    # noisy version: (1-ε)*T[x] + (ε/(S-1))*Σ_{x'≠x} T[x']
+    #              = (1-ε)*T[x] + (ε/(S-1))*(T_state - T[x])
+    T_noisy = (1 - epsilon) * T + (epsilon / (S - 1)) * (T_state[None] - T)
+    return SequenceGenerator(
+        transition_distributions=T_noisy,
+        initial_distribution=gen.initial_distribution,
+    )
 
 
 # # #

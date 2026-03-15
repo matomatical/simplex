@@ -24,10 +24,15 @@ Replicate Shai et al. (2026) "Transformers learn factored representations"
 
 * [x] Implement factorised HMM and visualisation
 * [x] Match their transformer architecture
-* [x] Train transformer
-* [x] Recover factorised state representation
-* [ ] "Approximately" factorised HMMs too
-* [ ] Replicate figure 4b
+* [x] Simple tetrahedron case
+  * [x] Train transformer
+  * [x] Recover (factorised) state representation (probes)
+  * [x] Epsilon sweep: turns out joint probe beats factored at all noise levels
+* [ ] Scale to 5-factor model
+  * [ ] Train transformer
+  * [ ] Recover (factorised) state representations (probes, PCA?)
+  * [ ] Epsilon sweep
+* [ ] Replicate figure 4b, stagewise development?
 
 Stage 3: Abstraction
 --------------------

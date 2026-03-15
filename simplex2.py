@@ -1,4 +1,6 @@
 import datetime
+import json
+import pathlib
 import sys
 
 import jax
@@ -15,7 +17,7 @@ import matthewplotlib as mp
 import strux
 from transformer import SequenceTransformer
 from generators import (
-    Sequence, SequenceGenerator, mess3,
+    Sequence, SequenceGenerator, mess3, noisy_channel,
     FIG1A_TOP, FIG1A_BOTTOM,
 )
 
@@ -57,12 +59,14 @@ def visualise(
         np.array([v[i] for _, *v in probe_losses])
         for i in range(1, 1 + len(factors))
     ]
+    joint_mse = np.array([v[-1] for _, *v in probe_losses])
 
-    ymax_probe = max(float(total_mse.max()), 0.01)
+    ymax_probe = max(float(total_mse.max()), float(joint_mse.max()), 0.01)
     probe_layers = [
         (probe_steps, total_mse, 'magenta'),
+        (probe_steps, joint_mse, 'yellow'),
     ]
-    colours = ['red', 'green', 'blue', 'yellow']
+    colours = ['red', 'green', 'blue']
     for i, mse in enumerate(per_factor_mses):
         probe_layers.append(
             (probe_steps, mse, colours[i % len(colours)])
@@ -75,7 +79,7 @@ def visualise(
             xrange=(0, xmax),
             yrange=(0, ymax_probe),
         ),
-        title=" probe mse (magenta=total, r/g=factors) ",
+        title=" probe mse (magenta=factored, yellow=joint, r/g=factors) ",
     )
 
     # per-factor probe accuracy: gt P(S+) vs probed P(S+)
@@ -192,6 +196,10 @@ def main(
     probe_layer: int      = -1,
     probe_num_seqs: int   = 512,
     vis_period: int       = 64,
+    # noise config
+    epsilon: float        = 0.0,
+    # output config
+    results_file: str     = '',
     # experiment config
     seed: int             = 42,
     train: bool           = True,
@@ -215,6 +223,9 @@ def main(
     sequence_generator = factors[0]
     for f in factors[1:]:
         sequence_generator = sequence_generator * f
+
+    if epsilon > 0:
+        sequence_generator = noisy_channel(sequence_generator, epsilon)
 
     factor_num_symbols = [f.num_symbols for f in factors]
     factor_num_states = [f.num_states for f in factors]
@@ -300,21 +311,17 @@ def main(
         axis=1,
     )
 
+    # joint beliefs from the (possibly noisy) generator for joint probe
+    joint_beliefs_all = jax.vmap(sequence_generator.belief_states)(probe_symbols)
+    joint_beliefs_all = joint_beliefs_all[:, 1:, :]  # drop prior
+    joint_beliefs_flat = joint_beliefs_all.reshape(-1, sequence_generator.num_states)
+
     # for visualisation: per-factor P(S+) (last state)
     vis_n = min(500, probe_num_seqs * sequence_length)
     factor_beliefs_vis = [
         b.reshape(-1, b.shape[-1])[:vis_n, -1]
         for b in per_factor_beliefs
     ]
-    # joint beliefs for tetrahedron (outer product of factor marginals)
-    joint_beliefs_vis = per_factor_beliefs[0].reshape(-1, factor_num_states[0])[:vis_n]
-    for i in range(1, len(factors)):
-        bi = per_factor_beliefs[i].reshape(-1, factor_num_states[i])[:vis_n]
-        joint_beliefs_vis = (
-            np.array(joint_beliefs_vis)[:, :, None]
-            * np.array(bi)[:, None, :]
-        ).reshape(vis_n, -1)
-    joint_beliefs_vis = np.array(joint_beliefs_vis)
 
 
     print("defining train step...")
@@ -372,6 +379,7 @@ def main(
         # affine least-squares probe: [activations | 1] @ W ≈ beliefs
         ones = jnp.ones((acts_flat.shape[0], 1))
         X = jnp.concatenate([acts_flat, ones], axis=1)
+        # factored probe: predict per-factor beliefs from sub-token decomposition
         W, _, _, _ = jnp.linalg.lstsq(X, probe_beliefs_flat)
         predicted = X @ W
         # total MSE
@@ -386,7 +394,11 @@ def main(
                 jnp.mean((factor_true - factor_pred) ** 2)
             )
             offset += ns
-        return predicted, total_mse, per_factor_mse
+        # joint probe: predict true Bayesian beliefs from noisy joint generator
+        W_joint, _, _, _ = jnp.linalg.lstsq(X, joint_beliefs_flat)
+        predicted_joint = X @ W_joint
+        joint_mse = jnp.mean((joint_beliefs_flat - predicted_joint) ** 2)
+        return predicted, total_mse, per_factor_mse, predicted_joint, joint_mse
 
 
     if not train: return
@@ -395,28 +407,23 @@ def main(
     # seed with initial model loss and probe
     key_eval, key = jax.random.split(key)
     train_losses = [float(eval_loss(key_eval, model))]
-    predicted, total_mse, per_factor_mse = probe(model)
-    probe_losses = [(0, float(total_mse), *[float(m) for m in per_factor_mse])]
+    predicted, total_mse, per_factor_mse, predicted_joint, joint_mse = probe(model)
+    probe_losses = [(0, float(total_mse), *[float(m) for m in per_factor_mse], float(joint_mse))]
 
-    # extract per-factor predicted P(S+) and joint predictions for vis
-    def extract_vis_predictions(predicted):
+    # extract per-factor predicted P(S+) for scatter plots
+    def extract_factor_predictions(predicted):
         factor_preds = []
-        factor_marginals = []
         offset = 0
         for ns in factor_num_states:
             factor_preds.append(np.array(predicted[:vis_n, offset + ns - 1]))
-            factor_marginals.append(np.array(predicted[:vis_n, offset:offset+ns]))
             offset += ns
-        # reconstruct joint beliefs from probed marginals (independence)
-        joint_preds = factor_marginals[0]
-        for m in factor_marginals[1:]:
-            # outer product: (n, s1, 1) * (n, 1, s2) -> (n, s1, s2) -> (n, s1*s2)
-            joint_preds = (
-                joint_preds[:, :, None] * m[:, None, :]
-            ).reshape(len(m), -1)
-        return factor_preds, joint_preds
+        return factor_preds
 
-    factor_preds_vis, joint_preds_vis = extract_vis_predictions(predicted)
+    # true joint beliefs for tetrahedron (from the possibly-noisy generator)
+    joint_beliefs_vis = np.array(joint_beliefs_flat[:vis_n])
+
+    factor_preds_vis = extract_factor_predictions(predicted)
+    joint_preds_vis = np.array(predicted_joint[:vis_n])
     plot = visualise(
         0, factors, factor_beliefs_vis, factor_preds_vis,
         joint_beliefs_vis, joint_preds_vis,
@@ -435,11 +442,12 @@ def main(
 
         if (t + 1) % vis_period == 0:
             train_losses.append(float(loss))
-            predicted, total_mse, per_factor_mse = probe(model)
+            predicted, total_mse, per_factor_mse, predicted_joint, joint_mse = probe(model)
             probe_losses.append(
-                (t + 1, float(total_mse), *[float(m) for m in per_factor_mse])
+                (t + 1, float(total_mse), *[float(m) for m in per_factor_mse], float(joint_mse))
             )
-            factor_preds_vis, joint_preds_vis = extract_vis_predictions(predicted)
+            factor_preds_vis = extract_factor_predictions(predicted)
+            joint_preds_vis = np.array(predicted_joint[:vis_n])
             new_plot = visualise(
                 t + 1, factors, factor_beliefs_vis, factor_preds_vis,
                 joint_beliefs_vis, joint_preds_vis,
@@ -448,6 +456,21 @@ def main(
             tqdm.tqdm.write(f"{-plot}{new_plot}")
             plot = new_plot
 
+
+    # log final probe MSEs to results file
+    if results_file:
+        final_probe = probe_losses[-1]
+        # final_probe = (step, total_mse, *per_factor_mse, joint_mse)
+        result = {
+            "epsilon": epsilon,
+            "factored_mse": final_probe[1],
+            "joint_mse": final_probe[-1],
+            "train_loss": train_losses[-1],
+            "seed": seed,
+        }
+        with open(results_file, "a") as f:
+            f.write(json.dumps(result) + "\n")
+        print(f"wrote result to {results_file}")
 
     print("done!")
     end_time = datetime.datetime.now()
