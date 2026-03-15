@@ -186,6 +186,7 @@ def main(
     epsilon: float        = 0.0,
     # output config
     results_file: str     = '',
+    metrics_file: str     = '',
     # experiment config
     seed: int             = 42,
     train: bool           = True,
@@ -488,6 +489,18 @@ def main(
             )
             r2_history.append((t + 1, float(factored_r2), float(joint_r2)))
             dims_history.append((t + 1, int(dims_95)))
+            if metrics_file:
+                metric = {
+                    "step": t + 1,
+                    "train_loss": train_losses[-1],
+                    "factored_mse": float(factored_mse),
+                    "joint_mse": float(joint_mse),
+                    "factored_r2": float(factored_r2),
+                    "joint_r2": float(joint_r2),
+                    "dims_95": int(dims_95),
+                }
+                with open(metrics_file, "a") as f:
+                    f.write(json.dumps(metric) + "\n")
             factor_preds_vis = extract_factor_predictions(predicted_fac)
             new_plot = visualise(
                 t + 1, factors, factor_beliefs_vis, factor_preds_vis,
