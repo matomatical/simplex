@@ -22,7 +22,8 @@ Stage 2: Factorisation
 Replicate Shai et al. (2026) "Transformers learn factored representations"
 ([arXiv](https://arxiv.org/abs/2602.02385)).
 
-* [ ] Implement (approximately) factorised HMM
+* [x] Implement factorised HMM and visualisation
+  * [ ] "Approximately" factories HMMs too
 * [ ] Match their transformer architecture
 * [ ] Train transformer
 * [ ] Recover factorised state representation

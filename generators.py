@@ -126,29 +126,98 @@ class SequenceGenerator:
         )
 
 
-# # # 
+    def __mul__(self: Self, other: Self) -> Self:
+        """Product of two independent generators.
+
+        Combines sub-tokens from each factor into joint tokens via the
+        cartesian product: x = z1 * other.num_symbols + z2.
+        The joint transition matrix for each combined symbol is the
+        Kronecker product of the individual transition matrices.
+        """
+        s1, n1, _ = self.transition_distributions.shape
+        s2, n2, _ = other.transition_distributions.shape
+        # build joint transition distributions: (s1*s2, n1*n2, n1*n2)
+        # for combined symbol x = z1 * s2 + z2
+        joint_T = jnp.zeros((s1 * s2, n1 * n2, n1 * n2))
+        for z1 in range(s1):
+            for z2 in range(s2):
+                x = z1 * s2 + z2
+                joint_T = joint_T.at[x].set(
+                    jnp.kron(
+                        self.transition_distributions[z1],
+                        other.transition_distributions[z2],
+                    )
+                )
+        joint_init = jnp.kron(self.initial_distribution, other.initial_distribution)
+        return SequenceGenerator(
+            transition_distributions=joint_T,
+            initial_distribution=joint_init,
+        )
+
+
+# # #
+# Parameterised generators
+
+
+def mess3(alpha: float = 0.85, x: float = 0.05) -> SequenceGenerator:
+    """Construct a Mess3 generator with given parameters.
+
+    The Mess3 process has 3 hidden states and 3 observable tokens.
+    Parameters alpha and x control the transition structure:
+      beta = (1 - alpha) / 2
+      y = 1 - 2*x
+    """
+    beta = (1 - alpha) / 2
+    y = 1 - 2 * x
+    T0 = jnp.array([
+        [alpha*y, beta*x, beta*x],
+        [alpha*x, beta*y, beta*x],
+        [alpha*x, beta*x, beta*y],
+    ])
+    T1 = jnp.array([
+        [beta*y, alpha*x, beta*x],
+        [beta*x, alpha*y, beta*x],
+        [beta*x, alpha*x, beta*y],
+    ])
+    T2 = jnp.array([
+        [beta*y, beta*x, alpha*x],
+        [beta*x, beta*y, alpha*x],
+        [beta*x, beta*x, alpha*y],
+    ])
+    return SequenceGenerator(
+        transition_distributions=jnp.stack([T0, T1, T2]),
+        initial_distribution=jnp.ones(3) / 3,
+    )
+
+
+# # #
 # Example sequence generators
 
 
-MESS3 = SequenceGenerator(
+MESS3 = mess3(alpha=0.85, x=0.05)
+
+
+# Figure 1a two-state processes.
+# Sminus only emits symbol 1; Splus emits 1 (stay) or 0 (switch to Sminus).
+# T[symbol, from_state, to_state] where states are [Sminus, Splus].
+FIG1A_TOP = SequenceGenerator(
     transition_distributions=jnp.array([
-        [
-            [0.765,  0.00375, 0.00375,],
-            [0.0425, 0.0675,  0.00375,],
-            [0.0425, 0.00375, 0.0675, ],
-        ],
-        [
-            [0.0675, 0.0425,  0.00375,],
-            [0.00375, 0.765,  0.00375,],
-            [0.00375, 0.0425, 0.0675, ],
-        ],
-        [
-            [0.0675,  0.00375, 0.0425,],
-            [0.00375, 0.0675,  0.0425,],
-            [0.00375, 0.00375, 0.765, ],
-        ],
+        [[0.00, 0.00],   # symbol 0 from Sminus: never
+         [0.35, 0.00]],  # symbol 0 from Splus: switch to Sminus
+        [[0.70, 0.30],   # symbol 1 from Sminus: stay or switch
+         [0.00, 0.65]],  # symbol 1 from Splus: stay
     ]),
-    initial_distribution=jnp.ones(3) / 3,
+    initial_distribution=jnp.array([0.5, 0.5]),
+)
+
+FIG1A_BOTTOM = SequenceGenerator(
+    transition_distributions=jnp.array([
+        [[0.00, 0.00],   # symbol 0 from Sminus: never
+         [0.35, 0.00]],  # symbol 0 from Splus: switch to Sminus
+        [[0.60, 0.40],   # symbol 1 from Sminus: stay or switch
+         [0.00, 0.65]],  # symbol 1 from Splus: stay
+    ]),
+    initial_distribution=jnp.array([0.5, 0.5]),
 )
 
 
@@ -193,51 +262,97 @@ def main(
     num_sequences: int = 1000,
     sequence_length: int = 100,
     seed: int = 0,
-    save: str | None = None,
+    num_frames: int = 0,
+    fps: int = 10,
 ):
     import numpy as np
     import matthewplotlib as mp
+    import time
 
     GENERATORS = {
         "mess3": MESS3,
         "zor": ZOR,
         "alt": ALT,
+        "fig1a": FIG1A_TOP * FIG1A_BOTTOM,
     }
     gen = GENERATORS[generator]
     key = jax.random.key(seed)
 
     # sample sequences and compute belief states
     batch = gen.sample_batch(key, sequence_length, num_sequences)
-    # compute belief states for each sequence: batch_size x (n+1) x states
     all_beliefs = jax.vmap(gen.belief_states)(batch.symbols)
-    # flatten to (batch_size * (n+1)) x states, drop the prior (first timestep)
+    # flatten, drop the prior (first timestep)
     beliefs = all_beliefs[:, 1:, :].reshape(-1, gen.num_states)
     beliefs = np.array(beliefs)
 
-    # project 3-state simplex to 2D equilateral triangle
-    # vertices: v0=(0,0), v1=(1,0), v2=(0.5, sqrt(3)/2)
-    xs = beliefs[:, 1] + 0.5 * beliefs[:, 2]
-    ys = (np.sqrt(3) / 2) * beliefs[:, 2]
+    # visualisation
+    if generator == "fig1a":
 
-    # color by belief state (RGB = probability of each state)
-    cs = np.stack([beliefs[:, 0], beliefs[:, 1], beliefs[:, 2]], axis=-1)
-    cs = (cs * 255).astype(np.uint8)
+        # 4 joint states from 2x2 product: colour by factor marginals
+        b = beliefs.reshape(-1, 2, 2)
+        b1 = b.sum(axis=2)[:, 1]  # P(factor1 = state 1)
+        b2 = b.sum(axis=1)[:, 1]  # P(factor2 = state 1)
+        cs = np.stack([b1, b2, 0.5*np.ones(len(b1))], axis=-1)
+        cs = (cs * 255).astype(np.uint8)
 
-    plot = mp.axes(
-        mp.scatter(
-            (xs, ys, cs),
-            height=30,
-            width=60,
-            xrange=(-0.05, 1.05),
-            yrange=(-0.05, 0.95),
-        ),
-        title=f" {generator} belief states ",
-        xlabel="",
-        ylabel="",
-    )
-    print(plot)
-    if save:
-        plot.saveimg(save)
+        # embed 3-simplex as regular tetrahedron
+        verts = np.array([[-1,1,-1], [1,-1,-1], [-1,-1,1], [1,1,1]], dtype=float)
+        pts = beliefs @ verts
+
+        # tetrahedron edges
+        edges = []
+        for i in range(4):
+            for j in range(i+1, 4):
+                t = np.linspace(0, 1, 200)[:, None]
+                edges.append(verts[i] * (1 - t) + verts[j] * t)
+        edge_pts = np.concatenate(edges)
+        edge_cs = np.full((len(edge_pts), 3), 80, dtype=np.uint8)
+
+        # rotating camera
+        orbit_radius = 5.0
+        orbit_height = 1.5
+        orbit_speed = 0.4 * np.pi
+        plot = None
+        frame = 0
+        while num_frames == 0 or frame < num_frames:
+            angle = orbit_speed * frame / fps
+            cam = np.array([
+                orbit_radius * np.sin(angle),
+                orbit_height,
+                orbit_radius * np.cos(angle),
+            ])
+            if plot:
+                print(-plot, end="")
+            plot = mp.scatter3(
+                (edge_pts, edge_cs),
+                (pts, cs),
+                camera_position=cam,
+                vertical_fov_degrees=30,
+                height=40,
+                width=100,
+            )
+            print(plot)
+            frame += 1
+            time.sleep(1 / fps)
+    else:
+        # 3-state simplex projection
+        xs = beliefs[:, 1] + 0.5 * beliefs[:, 2]
+        ys = (np.sqrt(3) / 2) * beliefs[:, 2]
+        cs = np.stack([beliefs[:, 0], beliefs[:, 1], beliefs[:, 2]], axis=-1)
+        cs = (cs * 255).astype(np.uint8)
+        plot = mp.axes(
+            mp.scatter(
+                (xs, ys, cs),
+                height=30,
+                width=60,
+                xrange=(-0.05, 1.05),
+                yrange=(-0.05, 0.95),
+            ),
+            title=f" {generator} belief states ",
+            xlabel="",
+            ylabel="",
+        )
+        print(plot)
 
 
 if __name__ == "__main__":
