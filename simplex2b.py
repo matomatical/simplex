@@ -163,7 +163,7 @@ def visualise(
 def main(
     # data config
     sequence_length: int  = 8,
-    num_factors: int      = 3,
+    num_factors: int      = 5,
     # model config
     num_blocks: int       = 4,
     embed_size: int       = 120,
@@ -206,11 +206,9 @@ def main(
 
     print("initialising training distribution...")
     key_tasks, key = jax.random.split(key)
-    alphas = np.linspace(0.55, 0.85, num_factors)
-    xs = np.linspace(0.10, 0.45, num_factors)
-    factors = [mess3(alpha=float(a), x=float(x)) for a, x in zip(alphas, xs)]
-    for i, (a, x) in enumerate(zip(alphas, xs)):
-        print(f"  F{i}: alpha={a:.3f}, x={x:.3f}")
+    factors = [mess3(alpha=0.6, x=0.15) for _ in range(num_factors)]
+    for i in range(num_factors):
+        print(f"  F{i}: Mess3 alpha=0.600, x=0.150")
 
     sequence_generator = factors[0]
     for f in factors[1:]:
