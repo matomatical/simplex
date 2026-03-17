@@ -131,6 +131,11 @@ class SequenceGenerator:
         )
 
 
+    def __add__(self: Self, other: Self) -> Self:
+        """Disjoint union of two generators. See disjoint_union()."""
+        return disjoint_union(self, other)
+
+
     def __mul__(self: Self, other: Self) -> Self:
         """Product of two independent generators.
 
@@ -160,6 +165,38 @@ class SequenceGenerator:
         )
 
 
+def disjoint_union(*generators: SequenceGenerator) -> SequenceGenerator:
+    """Disjoint union of N generators (shared symbol alphabet).
+
+    The union HMM first chooses which component to enter (uniformly 1/N),
+    then samples from that component forever. The transition matrix is
+    block-diagonal: no transitions between components.
+    """
+    assert len(generators) >= 1
+    num_symbols = generators[0].num_symbols
+    for gen in generators[1:]:
+        assert gen.num_symbols == num_symbols, (
+            f"Disjoint union requires same symbol alphabet, "
+            f"got {num_symbols} vs {gen.num_symbols} symbols"
+        )
+    total_states = sum(gen.num_states for gen in generators)
+    N = len(generators)
+    union_T = jnp.zeros((num_symbols, total_states, total_states))
+    init_parts = []
+    offset = 0
+    for gen in generators:
+        n = gen.num_states
+        union_T = union_T.at[:, offset:offset+n, offset:offset+n].set(
+            gen.transition_distributions,
+        )
+        init_parts.append(gen.initial_distribution / N)
+        offset += n
+    return SequenceGenerator(
+        transition_distributions=union_T,
+        initial_distribution=jnp.concatenate(init_parts),
+    )
+
+
 def noisy_channel(gen: SequenceGenerator, epsilon: float) -> SequenceGenerator:
     """Apply memoryless epsilon-noise to a generator.
 
@@ -177,6 +214,29 @@ def noisy_channel(gen: SequenceGenerator, epsilon: float) -> SequenceGenerator:
         transition_distributions=T_noisy,
         initial_distribution=gen.initial_distribution,
     )
+
+
+def decompose_union_beliefs(
+    beliefs: Float[Array, "... total_states"],
+    component_sizes: list[int],
+) -> tuple[Float[Array, "... num_components"], list[Float[Array, "... states_i"]]]:
+    """Decompose joint beliefs from a disjoint union into per-component parts.
+
+    Returns:
+        weights: mixture weights per component (sum to 1)
+        component_beliefs: normalized belief within each component
+    """
+    splits = []
+    offset = 0
+    for size in component_sizes:
+        splits.append(beliefs[..., offset:offset + size])
+        offset += size
+    weights = jnp.stack([block.sum(axis=-1) for block in splits], axis=-1)
+    component_beliefs = [
+        block / jnp.maximum(block.sum(axis=-1, keepdims=True), 1e-30)
+        for block in splits
+    ]
+    return weights, component_beliefs
 
 
 # # #
@@ -287,7 +347,7 @@ def main(
     sequence_length: int = 100,
     seed: int = 0,
     num_frames: int = 0,
-    fps: int = 10,
+    fps: int = 20,
 ):
     import numpy as np
     import matthewplotlib as mp
@@ -298,6 +358,7 @@ def main(
         "zor": ZOR,
         "alt": ALT,
         "fig1a": FIG1A_TOP * FIG1A_BOTTOM,
+        "union": mess3(0.6, 0.15) + mess3(0.85, 0.05),
     }
     gen = GENERATORS[generator]
     key = jax.random.key(seed)
@@ -310,7 +371,83 @@ def main(
     beliefs = np.array(beliefs)
 
     # visualisation
-    if generator == "fig1a":
+    if generator == "union":
+
+        # decompose joint beliefs into mixture weights + per-component
+        weights, comp_beliefs = decompose_union_beliefs(
+            beliefs, [3, 3],
+        )
+        w1 = weights[:, 0]  # mixture weight for component 1
+
+        # 2D simplex coordinates for each component's beliefs
+        def simplex_xy(b):
+            return -0.5 + b[:, 1] + 0.5 * b[:, 2], (np.sqrt(3) / 2) * b[:, 2]
+        x1, y1 = simplex_xy(np.array(comp_beliefs[0]))
+        x2, y2 = simplex_xy(np.array(comp_beliefs[1]))
+        w1 = np.array(w1)
+
+        # place triangle 1 at z=+1.5, triangle 2 at z=-1.5
+        # interpolate each point's 3D position by mixture weight
+        sep = 1.0
+        pts = np.stack([
+            w1 * x1 + (1 - w1) * x2,
+            w1 * y1 + (1 - w1) * y2,
+            w1 * sep - (1 - w1) * sep,
+        ], axis=-1)
+
+        # color: red = component 1, blue = component 2
+        cs = np.stack([
+            w1,
+            0.2 * np.ones(len(w1)),
+            1 - w1,
+        ], axis=-1)
+        cs = (cs * 255).astype(np.uint8)
+
+        # triangle wireframes at z = ±sep
+        tri_verts = np.array([
+            [-0.5, 0], [0.5, 0], [0, np.sqrt(3)/2],
+        ])
+        edge_pts_list = []
+        for z in [sep, -sep]:
+            for i in range(3):
+                j = (i + 1) % 3
+                t = np.linspace(0, 1, 200)[:, None]
+                edge_2d = tri_verts[i] * (1 - t) + tri_verts[j] * t
+                edge_3d = np.column_stack([
+                    edge_2d, np.full(200, z),
+                ])
+                edge_pts_list.append(edge_3d)
+        edge_pts = np.concatenate(edge_pts_list)
+        edge_cs = np.full((len(edge_pts), 3), 80, dtype=np.uint8)
+
+        # rotating camera
+        orbit_radius = 5.0
+        orbit_height = 1.5
+        orbit_speed = 0.4 * np.pi
+        plot = None
+        frame = 0
+        while num_frames == 0 or frame < num_frames:
+            angle = orbit_speed * frame / fps
+            cam = np.array([
+                orbit_radius * np.sin(angle),
+                orbit_height,
+                orbit_radius * np.cos(angle),
+            ])
+            if plot:
+                print(-plot, end="")
+            plot = mp.scatter3(
+                (edge_pts, edge_cs),
+                (pts, cs),
+                camera_position=cam,
+                vertical_fov_degrees=30,
+                height=30,
+                width=80,
+            )
+            print(plot)
+            frame += 1
+            time.sleep(1 / fps)
+
+    elif generator == "fig1a":
 
         # 4 joint states from 2x2 product: colour by factor marginals
         b = beliefs.reshape(-1, 2, 2)

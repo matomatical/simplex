@@ -6,13 +6,14 @@ import numpy as np
 import tyro
 
 from typing import Literal
-from generators import MESS3, ZOR, ALT, SequenceGenerator
+from generators import MESS3, ZOR, ALT, SequenceGenerator, mess3
 
 
 GENERATORS = {
     "mess3": MESS3,
     "zor": ZOR,
     "alt": ALT,
+    "union": mess3(0.6, 0.15) + mess3(0.85, 0.05),
 }
 
 
@@ -60,7 +61,7 @@ def compute_baselines(
 
 
 def main(
-    generator: Literal["mess3", "zor", "alt"] = "mess3",
+    generator: Literal["mess3", "zor", "alt", "union"] = "mess3",
     num_sequences: int = 1000,
     sequence_length: int = 1000,
     seed: int = 0,
