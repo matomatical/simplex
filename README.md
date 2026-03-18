@@ -53,20 +53,20 @@ Thinking phase:
 
 Implementation phase:
 
-* [ ] Construct the training data set
-* [ ] Training loop to train a transformer on this data
-* [ ] Probes for the geometries, in comparison to individual process geometries
+* [x] Construct the training data set
+* [x] Training loop to train a transformer on this data
+* [x] Probes for the geometries, in comparison to individual process geometries
 
 Report phase
 
-* [ ] Initialise report
-* [ ] Why is this setting interesting
-* [ ] Prediction
-* [ ] Report experimental results
+* [x] Initialise report
+* [x] Why is this setting interesting
+* [x] Prediction
+* [x] Report experimental results
 
 Extension phase
 
-* [ ] Plan an extension, for example around continuous variables and the phase
+* [x] Plan an extension, for example around continuous variables and the phase
   transition to those.
 
 

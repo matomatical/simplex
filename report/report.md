@@ -388,16 +388,19 @@ discuss the project with any other human. I made some use of AI assistance as
 follows.
 
 * **Theory/predictions:** I derived the theoretical analysis of blockwise HMM
-  belief dynamics and derived my predictions without any AI assistance. The
-  suggestions for extensions and other related aspects are also my own.
+  belief dynamics and derived the two approaches to updating belief dynamics
+  without any AI assistance. Claude Opus 4.6 helped me understand the
+  implications of both approaches at the level of geometry. The suggestions for
+  extensions and other related aspects are my own.
 
 * **Implementation and experiments:** I had previously prepared, without AI
   assistance, an independent JAX replication of the HMM training experiments
   from Shai et al.\ (2024). However, today I directed Claude Code (Claude 4.6
   Opus) to extend this codebase to the non-ergodic setting, implement the
-  decomposed linear probing methodology, and launch my experiments. I dictated
-  the experimental methodology and hyperparameter choices, with minor input
-  from / discussion with Claude.
+  decomposed linear probing methodology, launch the experiments, and prepare
+  the final code package for upload. In particular, I dictated the experimental
+  methodology and hyperparameter choices, with some input from / discussion
+  with Claude.
 
   In my assessment, I would have written functionally identical code without AI
   assistance (though I would have made it cleaner and it would have taken me
@@ -405,7 +408,8 @@ follows.
 
 * **Report:** I wrote the report without any AI assistance, with the exception
   that I directed Claude Code to write the code to generate the figures in the
-  report according to my design.
+  report according to my design, and Claude also proof-read the final draft and
+  helped me fix a few grammatical errors and awkward expressions.
 
 
 References
