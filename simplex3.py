@@ -234,6 +234,7 @@ def main(
     vis_period: int           = 64,
     # logging
     metrics_file: str         = "",
+    animation_file: str       = "",
     # experiment config
     seed: int                 = 42,
 ):
@@ -519,6 +520,7 @@ def main(
         true_component, sequence_length,
     )
     print(plot)
+    frames = [plot] if animation_file else []
 
     for t in tqdm.trange(num_steps):
         key_sgd, key = jax.random.split(key)
@@ -565,7 +567,13 @@ def main(
             )
             tqdm.tqdm.write(f"{-plot}{new_plot}")
             plot = new_plot
+            if animation_file:
+                frames.append(new_plot)
 
+    if animation_file:
+        print(f"saving animation to {animation_file}...")
+        mp.save_animation(frames, animation_file, fps=12, bgcolor='black')
+        print(f"  saved {len(frames)} frames")
 
     print("done!")
     end_time = datetime.datetime.now()

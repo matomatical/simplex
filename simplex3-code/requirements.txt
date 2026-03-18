@@ -1,0 +1,10 @@
+# experiments
+numpy
+einops
+jax[tpu]
+jaxtyping
+optax
+tqdm
+tyro
+git+https://github.com/matomatical/matthewplotlib.git
+

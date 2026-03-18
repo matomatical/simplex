@@ -1,8 +1,12 @@
+# experiments
 numpy
 einops
-jax
+jax[tpu]
 jaxtyping
 optax
 tqdm
 tyro
 git+https://github.com/matomatical/matthewplotlib.git
+
+# report
+matplotlib

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Simplex3 Report</title>
+<style>
+body { font-family: system-ui; max-width: 1200px; margin: 0 auto; padding: 20px; background: #fafafa; }
+h1 { border-bottom: 2px solid #333; padding-bottom: 8px; }
+h2 { margin-top: 2em; color: #444; }
+img { max-width: 100%; border: 1px solid #ddd; margin: 10px 0; background: white; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.wide { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<h1>Stage 3: Non-ergodicity experiment</h1>
+<p>Union of Mess3(&alpha;=0.6, x=0.15) + Mess3(&alpha;=0.85, x=0.05) &mdash; 4 seeds, 1M steps each</p>
+
+<h2>Training animation</h2>
+<img src="training.gif">
+
+<h2>Ground-truth belief geometry</h2>
+<img src="ground_truth_simplices.png">
+<img src="ground_truth_weights.png">
+
+<h2>Training loss</h2>
+<img src="loss.png">
+
+<h2>Factored vs joint-decomposed probe MSE</h2>
+<img src="factored_vs_joint_bar.png">
+<img src="factored_vs_joint_bar_linear.png">
+<img src="factored_vs_joint_log.png">
+<img src="factored_vs_joint_linear.png">
+
+<h2>Per-position loss</h2>
+<img src="per_token_training.png">
+<img src="per_token_training_by_seed.png">
+<img src="per_position_loss.png">
+<img src="per_position_loss_by_seed.png">
+</body>
+</html>

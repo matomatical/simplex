@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="https://distill.pub/template.v1.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.4/dist/katex.min.css"/>
+<!--<link rel="stylesheet" href="https://pandoc.org/demo/pandoc.css"/>-->
+
+<script type="text/front-matter">
+title: "$title$"
+description: "$description$"
+authors:
+$for(author)$
+- $author$
+$endfor$
+affiliations:
+$for(institute)$
+- $institute$
+$endfor$
+</script>
+
+<dt-article>
+    <h1>$title$</h1>
+    <h2>$if(subtitle)$$subtitle$$endif$</h2>
+    <dt-byline></dt-byline>
+    $body$
+</dt-article>
+
+<!--
+<dt-appendix>
+</dt-appendix>
+-->
+
+<script type="text/bibliography">
+$for(bibliography)$
+$bibliography$
+$endfor$
+</script>
