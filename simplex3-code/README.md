@@ -6,7 +6,7 @@ Code for training a transformer on sequences from a disjoint union of two
 Mess3 HMMs and probing whether activations encode joint or modular
 (per-component) belief representations.
 
-![](../report/training.gif)
+![](training.gif)
 
 ## Files
 
