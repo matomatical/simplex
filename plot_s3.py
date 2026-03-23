@@ -209,7 +209,7 @@ def fig_training_loss(runs):
     print("Saved loss.png")
 
 
-def _fig_factored_vs_joint(runs, yscale, suffix):
+def _fig_factored_vs_joint(runs, yscale, suffix, xscale='linear'):
     """Factored vs joint-decomposed MSE for each component."""
     steps = runs[0]['step']
 
@@ -241,6 +241,7 @@ def _fig_factored_vs_joint(runs, yscale, suffix):
         ax.set_xlabel('Training step')
         if i == 0:
             ax.set_ylabel('MSE')
+        ax.set_xscale(xscale)
         ax.set_yscale(yscale)
         if yscale == 'log':
             ax.set_ylim(ymin, ymax)
@@ -259,6 +260,7 @@ def _fig_factored_vs_joint(runs, yscale, suffix):
 def fig_factored_vs_joint(runs):
     _fig_factored_vs_joint(runs, 'log', 'log')
     _fig_factored_vs_joint(runs, 'linear', 'linear')
+    _fig_factored_vs_joint(runs, 'log', 'loglog', xscale='log')
 
 
 def fig_per_position_loss_over_training(runs, bayes_per_pos):
@@ -379,6 +381,69 @@ def fig_per_position_loss_by_seed(runs, bayes_per_pos):
     print("Saved per_position_loss_by_seed.png")
 
 
+def fig_long_run_probe_mse():
+    """Log-log plot of per-component modular probe MSEs from long runs."""
+    long_runs = load_runs("s3_long_seed*_20260319_075710.jsonl")
+    steps = long_runs[0]['step']
+    colors = [f'C{i}' for i in range(len(long_runs))]
+
+    mse_panels = [
+        ('f_comp1_mse', r'Component 1 ($\theta$)'),
+        ('f_comp2_mse', r'Component 2 ($\lambda$)'),
+        ('f_w_mse', r'Mixture weight ($\alpha$)'),
+    ]
+
+    fig, axes = plt.subplots(1, 4, figsize=(20, 5))
+
+    # Training loss (log-log, same style as fig_training_loss)
+    ax = axes[0]
+    for idx, run in enumerate(long_runs):
+        ax.plot(run['step'], run['train_loss'], lw=0.3, alpha=0.15,
+                color=colors[idx])
+        s_steps = smooth(run['step'], 256)
+        s_loss = smooth(run['train_loss'], 256)
+        ax.plot(s_steps, s_loss, lw=1.5, alpha=0.9, color=colors[idx],
+                label=f'Seed {idx}')
+    ax.axhline(BAYES_OPTIMAL, color='red', ls='--', lw=1,
+               label=f'Bayes-optimal ({BAYES_OPTIMAL:.3f})')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Training step')
+    ax.set_ylabel('Loss (nats)')
+    ax.legend(fontsize=8)
+    ax.text(0.5, 1.02, 'Training loss', transform=ax.transAxes,
+            ha='center', fontsize=12)
+
+    # Probe MSE panels
+    for i, (key, label) in enumerate(mse_panels):
+        ax = axes[i + 1]
+        for idx, run in enumerate(long_runs):
+            s_steps = smooth(run['step'], 256)
+            s_vals = smooth(run[key], 256)
+            ax.plot(s_steps, s_vals, lw=1.0, alpha=0.7, color=colors[idx],
+                    label=f'Seed {idx}')
+        mean, se = mean_and_se(long_runs, key)
+        s_mean = smooth(mean, 256)
+        s_se = smooth(se, 256)
+        s_steps = smooth(steps, 256)
+        ax.plot(s_steps, s_mean, lw=2, color='black', label='Mean')
+        ax.fill_between(s_steps, s_mean - s_se, s_mean + s_se,
+                         color='black', alpha=0.15)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_xlabel('Training step')
+        if i == 0:
+            ax.set_ylabel('MSE')
+        ax.legend(fontsize=8)
+        ax.text(0.5, 1.02, label, transform=ax.transAxes,
+                ha='center', fontsize=12)
+
+    fig.tight_layout()
+    fig.savefig(OUTDIR / 'long_run_probe_mse.png')
+    plt.close(fig)
+    print(f"Saved long_run_probe_mse.png ({len(steps)} entries, up to step {steps[-1]})")
+
+
 def fig_factored_vs_joint_final(runs):
     """Bar chart comparing final factored vs joint MSE."""
     keys_j = ['j_comp1_mse', 'j_comp2_mse', 'j_w_mse']
@@ -440,4 +505,5 @@ if __name__ == '__main__':
     fig_per_position_loss(runs, bayes_per_pos)
     fig_per_position_loss_by_seed(runs, bayes_per_pos)
     fig_factored_vs_joint_final(runs)
+    fig_long_run_probe_mse()
     print("Done!")

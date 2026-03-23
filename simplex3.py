@@ -232,6 +232,7 @@ def main(
     probe_num_seqs: int       = 128,
     # display
     vis_period: int           = 64,
+    vis: bool                 = True,
     # logging
     metrics_file: str         = "",
     animation_file: str       = "",
@@ -492,42 +493,43 @@ def main(
     init_loss = float(optax.softmax_cross_entropy(
         logits=init_logits, labels=init_targets,
     ).mean())
-    train_losses = [init_loss]
+    if vis:
+        train_losses = [init_loss]
 
-    # initial probe
-    results = probe_all(model)
-    (p_mse,
-     pr_comp_beliefs_flat, pr_weights_flat,
-     j_c1, j_c2, j_w,
-     fr_comp_beliefs_flat, fr_weights_flat,
-     f_c1, f_c2, f_w) = process_probe_results(results)
+        # initial probe
+        results = probe_all(model)
+        (p_mse,
+         pr_comp_beliefs_flat, pr_weights_flat,
+         j_c1, j_c2, j_w,
+         fr_comp_beliefs_flat, fr_weights_flat,
+         f_c1, f_c2, f_w) = process_probe_results(results)
 
-    probe_losses = [(0, p_mse)]
-    subsystem_mses = [(0, j_c1, j_c2, j_w)]
-    factored_mses = [(0, f_c1, f_c2, f_w)]
+        probe_losses = [(0, p_mse)]
+        subsystem_mses = [(0, j_c1, j_c2, j_w)]
+        factored_mses = [(0, f_c1, f_c2, f_w)]
 
-    # initial per-position loss
-    init_pos_loss = np.array(eval_per_position(model))
-    position_losses = [(0, init_pos_loss)]
+        # initial per-position loss
+        init_pos_loss = np.array(eval_per_position(model))
+        position_losses = [(0, init_pos_loss)]
 
-    plot = visualise(
-        0, train_losses, probe_losses, subsystem_mses, factored_mses,
-        position_losses,
-        bayes_optimal, bayes_per_position, marginal_entropy, vis_period,
-        gt_comp_beliefs_flat, gt_weights_flat,
-        pr_comp_beliefs_flat, pr_weights_flat,
-        fr_comp_beliefs_flat, fr_weights_flat,
-        true_component, sequence_length,
-    )
-    print(plot)
-    frames = [plot] if animation_file else []
+        plot = visualise(
+            0, train_losses, probe_losses, subsystem_mses, factored_mses,
+            position_losses,
+            bayes_optimal, bayes_per_position, marginal_entropy, vis_period,
+            gt_comp_beliefs_flat, gt_weights_flat,
+            pr_comp_beliefs_flat, pr_weights_flat,
+            fr_comp_beliefs_flat, fr_weights_flat,
+            true_component, sequence_length,
+        )
+        print(plot)
+        frames = [plot] if animation_file else []
 
     for t in tqdm.trange(num_steps):
         key_sgd, key = jax.random.split(key)
         model, opt_state, loss = train_step(key_sgd, model, opt_state)
 
         if (t + 1) % vis_period == 0:
-            train_losses.append(float(loss))
+            current_loss = float(loss)
 
             results = probe_all(model)
             (p_mse,
@@ -536,18 +538,13 @@ def main(
              fr_comp_beliefs_flat, fr_weights_flat,
              f_c1, f_c2, f_w) = process_probe_results(results)
 
-            probe_losses.append((t + 1, p_mse))
-            subsystem_mses.append((t + 1, j_c1, j_c2, j_w))
-            factored_mses.append((t + 1, f_c1, f_c2, f_w))
-
             pos_loss = np.array(eval_per_position(model))
-            position_losses.append((t + 1, pos_loss))
 
             # metrics logging
             if metrics_file:
                 metric = {
                     "step": t + 1,
-                    "train_loss": train_losses[-1],
+                    "train_loss": current_loss,
                     "probe_mse": p_mse,
                     "j_comp1_mse": j_c1, "j_comp2_mse": j_c2, "j_w_mse": j_w,
                     "f_comp1_mse": f_c1, "f_comp2_mse": f_c2, "f_w_mse": f_w,
@@ -556,21 +553,28 @@ def main(
                 with open(metrics_file, "a") as f:
                     f.write(json.dumps(metric) + "\n")
 
-            new_plot = visualise(
-                t + 1, train_losses, probe_losses,
-                subsystem_mses, factored_mses, position_losses,
-                bayes_optimal, bayes_per_position, marginal_entropy, vis_period,
-                gt_comp_beliefs_flat, gt_weights_flat,
-                pr_comp_beliefs_flat, pr_weights_flat,
-                fr_comp_beliefs_flat, fr_weights_flat,
-                true_component, sequence_length,
-            )
-            tqdm.tqdm.write(f"{-plot}{new_plot}")
-            plot = new_plot
-            if animation_file:
-                frames.append(new_plot)
+            if vis:
+                train_losses.append(current_loss)
+                probe_losses.append((t + 1, p_mse))
+                subsystem_mses.append((t + 1, j_c1, j_c2, j_w))
+                factored_mses.append((t + 1, f_c1, f_c2, f_w))
+                position_losses.append((t + 1, pos_loss))
 
-    if animation_file:
+                new_plot = visualise(
+                    t + 1, train_losses, probe_losses,
+                    subsystem_mses, factored_mses, position_losses,
+                    bayes_optimal, bayes_per_position, marginal_entropy, vis_period,
+                    gt_comp_beliefs_flat, gt_weights_flat,
+                    pr_comp_beliefs_flat, pr_weights_flat,
+                    fr_comp_beliefs_flat, fr_weights_flat,
+                    true_component, sequence_length,
+                )
+                tqdm.tqdm.write(f"{-plot}{new_plot}")
+                plot = new_plot
+                if animation_file:
+                    frames.append(new_plot)
+
+    if vis and animation_file:
         print(f"saving animation to {animation_file}...")
         mp.save_animation(frames, animation_file, fps=12, bgcolor='black')
         print(f"  saved {len(frames)} frames")
@@ -578,8 +582,7 @@ def main(
     print("done!")
     end_time = datetime.datetime.now()
     print(f"  duration: {end_time - start_time}")
-    print(f"  final loss: {train_losses[-1]:.4f} nats")
-    print(f"  final probe MSE: {probe_losses[-1][1]:.6f}")
+    print(f"  final loss: {float(loss):.4f} nats")
     print(f"  bayes-optimal: {bayes_optimal:.4f} nats")
 
 
