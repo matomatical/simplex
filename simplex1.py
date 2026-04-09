@@ -1,4 +1,5 @@
 import datetime
+import json
 import sys
 
 import jax
@@ -134,6 +135,10 @@ def main(
     probe_layer: int      = -1,
     probe_num_seqs: int   = 512,
     vis_period: int       = 64,
+    # display
+    vis: bool             = True,
+    # logging
+    metrics_file: str     = "",
     # experiment config
     seed: int             = 42,
     train: bool           = True,
@@ -282,11 +287,14 @@ def main(
     print("starting training loop...")
     # seed with initial model loss and probe
     key_eval, key = jax.random.split(key)
-    train_losses = [float(eval_loss(key_eval, model))]
     predicted, p_loss = probe(model)
-    probe_losses = [(0, float(p_loss))]
-    plot = visualise(0, gt_simplex, predicted, train_losses, probe_losses, vis_period)
-    print(plot)
+
+    if vis:
+        train_losses = [float(eval_loss(key_eval, model))]
+        probe_losses = [(0, float(p_loss))]
+        plot = visualise(0, gt_simplex, predicted, train_losses, probe_losses, vis_period)
+        print(plot)
+
     # train!
     for t in tqdm.trange(num_steps):
         key_sgd, key = jax.random.split(key)
@@ -297,15 +305,27 @@ def main(
         )
 
         if (t + 1) % vis_period == 0:
-            train_losses.append(float(loss))
+            current_loss = float(loss)
             predicted, p_loss = probe(model)
-            probe_losses.append((t + 1, float(p_loss)))
-            new_plot = visualise(
-                t + 1, gt_simplex, predicted,
-                train_losses, probe_losses, vis_period,
-            )
-            tqdm.tqdm.write(f"{-plot}{new_plot}")
-            plot = new_plot
+
+            if metrics_file:
+                metric = {
+                    "step": t + 1,
+                    "train_loss": current_loss,
+                    "probe_mse": float(p_loss),
+                }
+                with open(metrics_file, "a") as f:
+                    f.write(json.dumps(metric) + "\n")
+
+            if vis:
+                train_losses.append(current_loss)
+                probe_losses.append((t + 1, float(p_loss)))
+                new_plot = visualise(
+                    t + 1, gt_simplex, predicted,
+                    train_losses, probe_losses, vis_period,
+                )
+                tqdm.tqdm.write(f"{-plot}{new_plot}")
+                plot = new_plot
 
 
     print("done!")
