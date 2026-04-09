@@ -80,7 +80,7 @@ class AffineTransform:
 
 @strux.struct(static_fieldnames=["num_heads"])
 class MultiHeadedCausalSelfAttention:
-    QKV: LinearTransform["3"]
+    QKV: LinearTransform
     output_transform: LinearTransform
     num_heads: int
 
@@ -293,7 +293,7 @@ class DecodeTransformerBlock:
 class DecodeTransformer:
     token_embedding: LinearTransform
     postn_embedding: LinearTransform
-    blocks: DecodeTransformerBlock["num_blocks"]
+    blocks: tuple
     unembedding_layernorm: LayerNorm
     unembedding: AffineTransform
 

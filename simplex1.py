@@ -139,6 +139,7 @@ def main(
     vis: bool             = True,
     # logging
     metrics_file: str     = "",
+    checkpoint_dir: str   = "",
     # experiment config
     seed: int             = 42,
     train: bool           = True,
@@ -184,7 +185,7 @@ def main(
         head_size=head_size,
         mlp_size=mlp_size,
     )
-    print(strux.size(model), "parameters")
+    print(strux.tree_size(model), "parameters")
 
 
     print("initialising optimiser")
@@ -284,6 +285,15 @@ def main(
 
     if not train: return
 
+    # checkpoint setup
+    if checkpoint_dir:
+        import math, os
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        max_exp = int(math.log10(max(num_steps, 1)))
+        checkpoint_steps = set(10**k for k in range(max_exp + 1))
+        checkpoint_steps.add(num_steps)
+        print(f"  will checkpoint at steps: {sorted(checkpoint_steps)}")
+
     print("starting training loop...")
     # seed with initial model loss and probe
     key_eval, key = jax.random.split(key)
@@ -326,6 +336,11 @@ def main(
                 )
                 tqdm.tqdm.write(f"{-plot}{new_plot}")
                 plot = new_plot
+
+        if checkpoint_dir and (t + 1) in checkpoint_steps:
+            path = f"{checkpoint_dir}/model_step{t+1}.npz"
+            strux.save(path, model)
+            tqdm.tqdm.write(f"  checkpoint saved: {path}")
 
 
     print("done!")

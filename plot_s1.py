@@ -112,9 +112,49 @@ def fig_long_run(runs):
           f"up to step {steps[-1]})")
 
 
+def fig_loss_convergence(runs):
+    """Cumulative running mean of loss minus baseline, log-linear and log-log."""
+    colors = [f'C{i}' for i in range(len(runs))]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+    for ax_idx, yscale in enumerate(['linear', 'log']):
+        ax = axes[ax_idx]
+        all_running = []
+        for idx, run in enumerate(runs):
+            cumsum = np.cumsum(run['train_loss'])
+            counts = np.arange(1, len(cumsum) + 1)
+            running_mean = cumsum / counts
+            excess = running_mean - BAYES_OPTIMAL
+            all_running.append(excess)
+            ax.plot(run['step'], excess, lw=0.8, alpha=0.7,
+                    color=colors[idx], label=f'Seed {idx}')
+        # mean across seeds
+        stacked = np.stack(all_running)
+        mean_excess = stacked.mean(axis=0)
+        se_excess = stacked.std(axis=0) / np.sqrt(len(runs))
+        steps = runs[0]['step']
+        ax.plot(steps, mean_excess, lw=2, color='black', label='Mean')
+        ax.fill_between(steps, mean_excess - se_excess,
+                         mean_excess + se_excess,
+                         color='black', alpha=0.15)
+        ax.set_xscale('log')
+        ax.set_yscale(yscale)
+        ax.set_xlabel('Training step')
+        ax.set_ylabel('Running mean loss - baseline')
+        ax.set_title(f'Loss convergence (log-{yscale})')
+        ax.legend(fontsize=8)
+
+    fig.tight_layout()
+    fig.savefig(OUTDIR / 'loss_convergence.png')
+    plt.close(fig)
+    print("Saved loss_convergence.png")
+
+
 if __name__ == '__main__':
     import sys
     pattern = sys.argv[1] if len(sys.argv) > 1 else "s1_long_seed*_20260409_071633.jsonl"
     runs = load_runs(pattern)
     fig_long_run(runs)
+    fig_loss_convergence(runs)
     print("Done!")

@@ -290,7 +290,7 @@ def main(
         head_size=head_size,
         mlp_size=mlp_size,
     )
-    print(f"  {strux.size(model)} parameters")
+    print(f"  {strux.tree_size(model)} parameters")
 
 
     print("initialising optimiser...")
